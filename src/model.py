@@ -1,16 +1,12 @@
 """
 MobileNetV2-based classifier for skin lesion classification.
+I replaced the original ImageNet head with a custom two-layer FC head
+and added helpers to freeze/unfreeze backbone layers for the different strategies.
 
-Three training strategies:
-  1. feature_extraction  – backbone fully frozen, only head trained
-  2. progressive         – backbone frozen first, then unfreeze last N layers
-  3. full_finetune       – entire network trained end-to-end from the start
-
-Architecture:
-  MobileNetV2 (pretrained on ImageNet)
-  └── Custom head:
-        GlobalAvgPool → Dropout(0.3) → Linear(1280→256) → ReLU
-        → Dropout(0.5) → Linear(256→num_classes)
+Three strategies this supports:
+  feature_extraction  - backbone stays frozen, only the head gets trained
+  progressive         - start frozen, then unfreeze backbone in stages
+  full_finetune       - train everything end-to-end from the beginning
 """
 
 from __future__ import annotations
@@ -22,10 +18,6 @@ from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
 NUM_CLASSES = 7
 
 
-# ---------------------------------------------------------------------------
-# Custom classification head
-# ---------------------------------------------------------------------------
-
 def _build_head(in_features: int, num_classes: int) -> nn.Sequential:
     return nn.Sequential(
         nn.Dropout(0.3),
@@ -36,22 +28,15 @@ def _build_head(in_features: int, num_classes: int) -> nn.Sequential:
     )
 
 
-# ---------------------------------------------------------------------------
-# Model builder
-# ---------------------------------------------------------------------------
-
 class SkinLesionMobileNetV2(nn.Module):
-    """
-    Wraps MobileNetV2 with a custom head.
-    Exposes helpers to freeze/unfreeze backbone layers.
-    """
+    """MobileNetV2 with a custom classification head for 7-class skin lesion task."""
 
     def __init__(self, num_classes: int = NUM_CLASSES, pretrained: bool = True):
         super().__init__()
         weights = MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = mobilenet_v2(weights=weights)
 
-        # Keep features; replace classifier
+        # keep the feature extractor, replace the classifier
         self.features = backbone.features          # 19 sequential blocks
         self.pool     = nn.AdaptiveAvgPool2d((1, 1))
         in_feat       = backbone.classifier[1].in_features   # 1280
@@ -63,23 +48,19 @@ class SkinLesionMobileNetV2(nn.Module):
         x = torch.flatten(x, 1)
         return self.head(x)
 
-    # ------------------------------------------------------------------
-    # Freeze / unfreeze helpers
-    # ------------------------------------------------------------------
-
     def freeze_backbone(self):
-        """Strategy 1 & start of Strategy 2: freeze all backbone params."""
+        """Freeze all backbone params - used for strategy 1 and start of strategy 2."""
         for p in self.features.parameters():
             p.requires_grad = False
 
     def unfreeze_last_n_blocks(self, n: int):
         """
-        Unfreeze the last *n* sequential blocks in self.features.
+        Unfreeze the last n blocks in self.features.
         MobileNetV2 has 19 blocks (indices 0-18).
-        Strategy 2 example:
-          epoch 0-9  → freeze all
-          epoch 10   → unfreeze last 5  (blocks 14-18)
-          epoch 15   → unfreeze last 10 (blocks 9-18)
+        Example schedule for progressive unfreezing:
+          epoch 0-9  -> freeze all
+          epoch 10   -> unfreeze last 5  (blocks 14-18)
+          epoch 15   -> unfreeze last 10 (blocks 9-18)
         """
         total = len(self.features)
         start = max(0, total - n)
@@ -89,7 +70,7 @@ class SkinLesionMobileNetV2(nn.Module):
                 p.requires_grad = requires
 
     def unfreeze_all(self):
-        """Strategy 3: unfreeze entire network."""
+        """Unfreeze everything - used for full_finetune strategy."""
         for p in self.parameters():
             p.requires_grad = True
 
@@ -103,21 +84,15 @@ class SkinLesionMobileNetV2(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-# ---------------------------------------------------------------------------
-# Strategy factory
-# ---------------------------------------------------------------------------
-
 def build_model(strategy: str, num_classes: int = NUM_CLASSES) -> SkinLesionMobileNetV2:
-    """
-    strategy: 'feature_extraction' | 'progressive' | 'full_finetune'
-    """
+    """Build a model configured for the given strategy."""
     model = SkinLesionMobileNetV2(num_classes=num_classes, pretrained=True)
 
     if strategy == "feature_extraction":
         model.freeze_backbone()
 
     elif strategy == "progressive":
-        # Start with frozen backbone; caller drives progressive unfreezing
+        # start frozen; train.py handles the progressive unfreezing schedule
         model.freeze_backbone()
 
     elif strategy == "full_finetune":
@@ -128,10 +103,6 @@ def build_model(strategy: str, num_classes: int = NUM_CLASSES) -> SkinLesionMobi
 
     return model
 
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
 
 def model_info(model: nn.Module) -> dict:
     total     = sum(p.numel() for p in model.parameters())

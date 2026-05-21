@@ -1,5 +1,5 @@
 """
-Week 1 — Train the from-scratch baseline CNN on HAM10000.
+Week 1 - trains the from-scratch baseline CNN on HAM10000.
 
 Usage:
     python src/train_baseline.py --epochs 40 --batch_size 32
@@ -20,10 +20,6 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from dataset import get_dataloaders, NUM_CLASSES
 from baseline_cnn import BaselineCNN, model_info
 
-
-# ---------------------------------------------------------------------------
-# Train / val helpers (same interface as train.py)
-# ---------------------------------------------------------------------------
 
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -63,10 +59,6 @@ def val_epoch(model, loader, criterion, device):
     rec = recall_score(all_labels, all_preds, average="macro",    zero_division=0)
     return total_loss / total, acc, f1, pre, rec
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()

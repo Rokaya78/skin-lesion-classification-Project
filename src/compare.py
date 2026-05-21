@@ -1,6 +1,6 @@
 """
-Week 4: Load the three eval JSON files and produce a side-by-side comparison
-table + bar charts.
+Week 4 - loads the eval JSON files for each strategy and builds comparison charts.
+Must run evaluate.py first for each strategy before this will work.
 
 Usage:
     python src/compare.py --results_dir results
@@ -26,10 +26,6 @@ STRATEGY_LABELS = {
 CLASS_NAMES = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def load_eval(results_dir: str, strategy: str) -> dict | None:
     path = os.path.join(results_dir, f"{strategy}_eval.json")
     if not os.path.isfile(path):
@@ -46,10 +42,6 @@ def load_train(results_dir: str, strategy: str) -> dict | None:
     with open(path) as f:
         return json.load(f)
 
-
-# ---------------------------------------------------------------------------
-# Summary table (printed + saved as txt)
-# ---------------------------------------------------------------------------
 
 def print_summary_table(data: dict[str, dict], out_dir: str):
     metrics = ["accuracy", "macro_f1", "weighted_f1", "macro_precision",
@@ -72,9 +64,9 @@ def print_summary_table(data: dict[str, dict], out_dir: str):
             row += f"{(f'{v:.4f}' if v is not None else 'N/A'):>{col_w}}"
         lines.append(row)
 
-    # BKL→MEL danger row
+    # bkl/mel danger - these two classes are frequently confused with each other
     lines.append("-" * len(header))
-    row = f"{'mel→bkl (danger %)':<20}"
+    row = f"{'mel->bkl (danger %)':<20}"
     for s in STRATEGIES:
         if s not in data:
             continue
@@ -82,7 +74,7 @@ def print_summary_table(data: dict[str, dict], out_dir: str):
         row += f"{(str(pct)+'%'):>{col_w}}"
     lines.append(row)
 
-    row = f"{'bkl→mel (%)':<20}"
+    row = f"{'bkl->mel (%)':<20}"
     for s in STRATEGIES:
         if s not in data:
             continue
@@ -97,10 +89,6 @@ def print_summary_table(data: dict[str, dict], out_dir: str):
         f.write(text + "\n")
     print(f"\nSaved: {path}")
 
-
-# ---------------------------------------------------------------------------
-# Bar chart: overall metrics
-# ---------------------------------------------------------------------------
 
 def plot_overall_metrics(data: dict[str, dict], out_dir: str):
     metrics     = ["accuracy", "macro_f1", "weighted_f1", "macro_recall"]
@@ -134,10 +122,6 @@ def plot_overall_metrics(data: dict[str, dict], out_dir: str):
     print(f"Saved: {path}")
 
 
-# ---------------------------------------------------------------------------
-# Grouped bar: per-class F1
-# ---------------------------------------------------------------------------
-
 def plot_per_class_f1(data: dict[str, dict], out_dir: str):
     present = [s for s in STRATEGIES if s in data]
     x       = np.arange(len(CLASS_NAMES))
@@ -170,10 +154,6 @@ def plot_per_class_f1(data: dict[str, dict], out_dir: str):
     plt.close(fig)
     print(f"Saved: {path}")
 
-
-# ---------------------------------------------------------------------------
-# Learning curves (from train JSONs)
-# ---------------------------------------------------------------------------
 
 def plot_learning_curves(results_dir: str, out_dir: str):
     colors = {"baseline_cnn":       "#95a5a6",
@@ -214,10 +194,6 @@ def plot_learning_curves(results_dir: str, out_dir: str):
     print(f"Saved: {path}")
 
 
-# ---------------------------------------------------------------------------
-# BKL–MEL danger chart
-# ---------------------------------------------------------------------------
-
 def plot_bkl_mel(data: dict[str, dict], out_dir: str):
     present = [s for s in STRATEGIES if s in data]
     mel_pct = [data[s]["bkl_mel_confusion"]["mel_misclassified_as_bkl_pct"] for s in present]
@@ -227,12 +203,12 @@ def plot_bkl_mel(data: dict[str, dict], out_dir: str):
     width   = 0.35
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.bar(x - width/2, mel_pct, width, label="mel→bkl (missed melanoma)", color="#e74c3c")
-    ax.bar(x + width/2, bkl_pct, width, label="bkl→mel (false alarm)",     color="#f39c12")
+    ax.bar(x - width/2, mel_pct, width, label="mel->bkl (missed melanoma)", color="#e74c3c")
+    ax.bar(x + width/2, bkl_pct, width, label="bkl->mel (false alarm)",     color="#f39c12")
     ax.set_xticks(x)
     ax.set_xticklabels(lbls, fontsize=10)
     ax.set_ylabel("% of class mis-classified")
-    ax.set_title("BKL ↔ MEL Confusion by Strategy\n(mel→bkl = clinically dangerous)", fontsize=12)
+    ax.set_title("BKL <-> MEL Confusion by Strategy\n(mel->bkl = clinically dangerous)", fontsize=12)
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
@@ -241,10 +217,6 @@ def plot_bkl_mel(data: dict[str, dict], out_dir: str):
     plt.close(fig)
     print(f"Saved: {path}")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -268,7 +240,7 @@ def main():
     plot_learning_curves(args.results_dir, args.results_dir)
     plot_bkl_mel(data, args.results_dir)
 
-    # Save combined JSON
+    # dump everything to one combined file for easy access
     out = os.path.join(args.results_dir, "all_strategies_comparison.json")
     with open(out, "w") as f:
         json.dump(data, f, indent=2)

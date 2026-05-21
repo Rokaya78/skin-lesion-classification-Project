@@ -1,21 +1,17 @@
 """
-Ablation Study — at least 3 controlled experiments varying one factor at a time.
+Ablation experiments for the project report.
+I'm testing 4 things one at a time (keeping everything else the same):
+  1. learning rate: tried 1e-2, 1e-3, 1e-4, 1e-5
+  2. dropout rate in the head: 0.2, 0.35, 0.5, 0.65
+  3. augmentation strength: none, flip only, full pipeline
+  4. class imbalance handling: no fix, class weights, weighted sampler, both
 
-Experiments (all use MobileNetV2 full_finetune strategy as the base):
-  EXP-1  Learning rate sensitivity     : lr ∈ {1e-2, 1e-3, 1e-4, 1e-5}
-  EXP-2  Dropout rate sensitivity      : dropout ∈ {0.2, 0.35, 0.5, 0.65}
-  EXP-3  Data augmentation ablation    : none | flip_only | full_augment
-  EXP-4  Class-imbalance strategy      : no_handling | class_weights | sampler | both
+All experiments use MobileNetV2 full_finetune as the base setup.
+Default is 15 epochs per run which is short but enough to see differences.
 
-Each experiment trains for --ablation_epochs (default 15) — short enough for CPU,
-long enough to show relative differences.
-
-Usage:
-    python src/ablation.py --experiment lr          --ablation_epochs 15
-    python src/ablation.py --experiment dropout     --ablation_epochs 15
-    python src/ablation.py --experiment augmentation --ablation_epochs 15
-    python src/ablation.py --experiment imbalance   --ablation_epochs 15
-    python src/ablation.py --experiment all         --ablation_epochs 15
+Example:
+    python src/ablation.py --experiment lr --ablation_epochs 15
+    python src/ablation.py --experiment all --ablation_epochs 15
 """
 
 from __future__ import annotations
@@ -41,10 +37,7 @@ from dataset import (
 from model import SkinLesionMobileNetV2, model_info
 
 
-# ---------------------------------------------------------------------------
-# Mini train/eval loop (shared across all experiments)
-# ---------------------------------------------------------------------------
-
+# shared train/eval loop used by all experiments
 def _run_epochs(model, train_loader, val_loader, criterion,
                 optimizer, scheduler, device, epochs) -> list[dict]:
     history = []
@@ -91,12 +84,8 @@ def _fresh_model(strategy: str = "full_finetune") -> SkinLesionMobileNetV2:
     return build_model(strategy)
 
 
-# ---------------------------------------------------------------------------
-# EXP-1  Learning rate sensitivity
-# ---------------------------------------------------------------------------
-
+# Experiment 1: learning rate sensitivity
 def exp_learning_rate(args, device, train_loader, val_loader, class_weights):
-    """Vary LR; everything else fixed. Shows how sensitive MobileNetV2 is to LR."""
     lrs      = [1e-2, 1e-3, 1e-4, 1e-5]
     results  = {}
 
@@ -118,12 +107,8 @@ def exp_learning_rate(args, device, train_loader, val_loader, class_weights):
     return results
 
 
-# ---------------------------------------------------------------------------
-# EXP-2  Dropout sensitivity
-# ---------------------------------------------------------------------------
-
+# Experiment 2: dropout sensitivity
 def exp_dropout(args, device, train_loader, val_loader, class_weights):
-    """Vary dropout in the classification head; backbone learning rate fixed at 1e-4."""
     dropouts = [0.2, 0.35, 0.5, 0.65]
     results  = {}
 
@@ -132,11 +117,10 @@ def exp_dropout(args, device, train_loader, val_loader, class_weights):
         print(f"\n  [{label}]")
         model     = SkinLesionMobileNetV2(num_classes=NUM_CLASSES).to(device)
 
-        # Rebuild head with custom dropout
+        # rebuild the head then swap in the new dropout value
         from model import _build_head
         in_feat   = 1280
         model.head = _build_head(in_feat, NUM_CLASSES).to(device)
-        # Patch dropout layers in the head with the experiment value
         for module in model.head.modules():
             if isinstance(module, nn.Dropout):
                 module.p = dp
@@ -155,10 +139,7 @@ def exp_dropout(args, device, train_loader, val_loader, class_weights):
     return results
 
 
-# ---------------------------------------------------------------------------
-# EXP-3  Data augmentation ablation
-# ---------------------------------------------------------------------------
-
+# Experiment 3: augmentation ablation
 def _make_transform_variant(variant: str):
     base_resize = transforms.Resize((IMG_SIZE, IMG_SIZE))
     to_tensor   = transforms.ToTensor()
@@ -174,7 +155,7 @@ def _make_transform_variant(variant: str):
             to_tensor, normalize,
         ])
 
-    # full_augment (same as production)
+    # full augmentation - same as the main training pipeline
     return transforms.Compose([
         transforms.Resize((IMG_SIZE + 20, IMG_SIZE + 20)),
         transforms.RandomCrop(IMG_SIZE),
@@ -188,7 +169,6 @@ def _make_transform_variant(variant: str):
 
 def exp_augmentation(args, device, val_loader, class_weights,
                      train_ids, csv_path, img_dirs):
-    """Remove/reduce augmentation to quantify its contribution."""
     variants = ["none", "flip_only", "full_augment"]
     results  = {}
 
@@ -217,16 +197,13 @@ def exp_augmentation(args, device, val_loader, class_weights,
     return results
 
 
-# ---------------------------------------------------------------------------
-# EXP-4  Class-imbalance handling strategy
-# ---------------------------------------------------------------------------
-
+# Experiment 4: class imbalance strategies
 def exp_imbalance(args, device, class_weights, val_loader,
                   train_ids, csv_path, img_dirs):
-    """Compare four ways of handling the HAM10000 class imbalance."""
     from torchvision import transforms as T
     tr = _make_transform_variant("full_augment")
 
+    # four combinations: sampler on/off, loss weights on/off
     strategies = {
         "no_handling":   (False, None),
         "class_weights": (False, "weights"),
@@ -267,10 +244,6 @@ def exp_imbalance(args, device, class_weights, val_loader,
     return results
 
 
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
-
 def plot_ablation(results: dict, title: str, x_key: str, out_path: str):
     import matplotlib
     matplotlib.use("Agg")
@@ -309,10 +282,6 @@ def print_summary(exp_name: str, results: dict):
         print(f"  {label:30s} best_val_f1 = {data['best_val_f1']:.4f}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="all",
@@ -332,7 +301,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}  |  Experiment: {args.experiment}")
 
-    # Build shared data split
+    # shared data split for all experiments
     train_loader, val_loader, class_weights = get_dataloaders(
         args.csv, args.img_dirs,
         val_split=args.val_split,
@@ -340,7 +309,7 @@ def main():
         num_workers=args.num_workers,
     )
 
-    # Extract train_ids for augmentation / imbalance experiments
+    # need train_ids separately for aug/imbalance experiments that rebuild the loader
     import pandas as pd, numpy as np
     meta     = pd.read_csv(args.csv)
     rng      = np.random.default_rng(42)
@@ -355,7 +324,6 @@ def main():
 
     all_results = {}
 
-    # ── EXP-1 LR ──────────────────────────────────────────────────────────
     if args.experiment in ("lr", "all"):
         print("\n" + "="*55)
         print("EXP-1: Learning Rate Sensitivity")
@@ -365,7 +333,6 @@ def main():
                       os.path.join(args.results_dir, "ablation_lr.png"))
         all_results["exp1_lr"] = res
 
-    # ── EXP-2 DROPOUT ─────────────────────────────────────────────────────
     if args.experiment in ("dropout", "all"):
         print("\n" + "="*55)
         print("EXP-2: Dropout Rate Sensitivity")
@@ -375,7 +342,6 @@ def main():
                       os.path.join(args.results_dir, "ablation_dropout.png"))
         all_results["exp2_dropout"] = res
 
-    # ── EXP-3 AUGMENTATION ────────────────────────────────────────────────
     if args.experiment in ("augmentation", "all"):
         print("\n" + "="*55)
         print("EXP-3: Data Augmentation Ablation")
@@ -386,7 +352,6 @@ def main():
                       os.path.join(args.results_dir, "ablation_augmentation.png"))
         all_results["exp3_augmentation"] = res
 
-    # ── EXP-4 IMBALANCE ───────────────────────────────────────────────────
     if args.experiment in ("imbalance", "all"):
         print("\n" + "="*55)
         print("EXP-4: Class Imbalance Strategy")
@@ -397,7 +362,6 @@ def main():
                       os.path.join(args.results_dir, "ablation_imbalance.png"))
         all_results["exp4_imbalance"] = res
 
-    # ── Save all results ───────────────────────────────────────────────────
     out = os.path.join(args.results_dir, "ablation_results.json")
     with open(out, "w") as f:
         json.dump(all_results, f, indent=2)

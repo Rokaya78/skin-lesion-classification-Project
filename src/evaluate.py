@@ -1,6 +1,7 @@
 """
-Evaluation script: confusion matrix, per-class precision/recall/F1,
-and special analysis of bkl (benign keratosis) vs mel (melanoma) errors.
+Evaluation script - runs the saved model on the validation set and reports metrics.
+Also looks specifically at bkl/mel confusion because those two classes are visually
+similar and mel->bkl errors (missed melanoma) are the most dangerous kind of mistake.
 
 Usage:
     python src/evaluate.py --strategy baseline_cnn
@@ -31,10 +32,6 @@ from model import build_model
 from baseline_cnn import BaselineCNN
 
 
-# ---------------------------------------------------------------------------
-# Inference
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def get_predictions(model, loader, device):
     model.eval()
@@ -53,10 +50,6 @@ def get_predictions(model, loader, device):
         np.vstack(all_probs),
     )
 
-
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
 
 def plot_confusion_matrix(cm: np.ndarray, strategy: str, out_dir: str):
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -77,6 +70,7 @@ def plot_confusion_matrix(cm: np.ndarray, strategy: str, out_dir: str):
 def plot_per_class_f1(per_class_f1: dict, strategy: str, out_dir: str):
     names  = list(per_class_f1.keys())
     values = list(per_class_f1.values())
+    # highlight mel and bkl in red since they're the problem pair
     colors = ["#e74c3c" if n in ("mel", "bkl") else "#3498db" for n in names]
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -94,16 +88,12 @@ def plot_per_class_f1(per_class_f1: dict, strategy: str, out_dir: str):
     print(f"Saved: {path}")
 
 
-# ---------------------------------------------------------------------------
-# BKL ↔ MEL confusion analysis
-# ---------------------------------------------------------------------------
-
 def bkl_mel_analysis(labels, preds, cm) -> dict:
     mel_idx = CLASS_NAMES.index("mel")
     bkl_idx = CLASS_NAMES.index("bkl")
 
-    mel_as_bkl = cm[mel_idx, bkl_idx]   # true=mel, pred=bkl
-    bkl_as_mel = cm[bkl_idx, mel_idx]   # true=bkl, pred=mel
+    mel_as_bkl = cm[mel_idx, bkl_idx]   # true=mel, pred=bkl  <- dangerous
+    bkl_as_mel = cm[bkl_idx, mel_idx]   # true=bkl, pred=mel  <- false alarm
 
     total_mel = cm[mel_idx].sum()
     total_bkl = cm[bkl_idx].sum()
@@ -114,15 +104,11 @@ def bkl_mel_analysis(labels, preds, cm) -> dict:
         "bkl_misclassified_as_mel": int(bkl_as_mel),
         "bkl_misclassified_as_mel_pct": round(bkl_as_mel / max(total_bkl, 1) * 100, 1),
         "note": (
-            "mel→bkl errors are clinically dangerous (missed melanoma). "
-            "bkl→mel errors cause unnecessary procedures."
+            "mel->bkl errors are clinically dangerous (missed melanoma). "
+            "bkl->mel errors cause unnecessary procedures."
         ),
     }
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -162,32 +148,26 @@ def main():
 
     labels, preds, probs = get_predictions(model, val_loader, device)
 
-    # ---- Metrics ----
     acc  = (preds == labels).mean()
     f1_macro  = f1_score(labels, preds, average="macro",    zero_division=0)
     f1_weighted = f1_score(labels, preds, average="weighted", zero_division=0)
     pre  = precision_score(labels, preds, average="macro",   zero_division=0)
     rec  = recall_score(labels, preds, average="macro",      zero_division=0)
 
-    # AUC (one-vs-rest)
+    # AUC - one-vs-rest
     labels_bin = label_binarize(labels, classes=list(range(NUM_CLASSES)))
     try:
         auc = roc_auc_score(labels_bin, probs, average="macro", multi_class="ovr")
     except ValueError:
         auc = None
 
-    # Per-class F1
     per_f1_vals = f1_score(labels, preds, average=None, zero_division=0)
     per_class_f1 = {cls: round(float(v), 4)
                     for cls, v in zip(CLASS_NAMES, per_f1_vals)}
 
-    # Confusion matrix
     cm = confusion_matrix(labels, preds)
-
-    # BKL ↔ MEL analysis
     bkl_mel = bkl_mel_analysis(labels, preds, cm)
 
-    # ---- Report ----
     print(f"\n{'='*55}")
     print(f"Strategy : {args.strategy}")
     print(f"Accuracy : {acc*100:.2f}%")
@@ -198,21 +178,19 @@ def main():
         print(f"AUC (OvR): {auc:.4f}")
     print(f"\nPer-class F1:")
     for cls, v in per_class_f1.items():
-        marker = " ← check" if cls in ("mel", "bkl") else ""
+        marker = " <- check" if cls in ("mel", "bkl") else ""
         print(f"  {cls:6s} : {v:.4f}{marker}")
-    print(f"\nBKL ↔ MEL confusion:")
-    print(f"  mel→bkl: {bkl_mel['mel_misclassified_as_bkl']} "
+    print(f"\nBKL <-> MEL confusion:")
+    print(f"  mel->bkl: {bkl_mel['mel_misclassified_as_bkl']} "
           f"({bkl_mel['mel_misclassified_as_bkl_pct']}% of mel)")
-    print(f"  bkl→mel: {bkl_mel['bkl_misclassified_as_mel']} "
+    print(f"  bkl->mel: {bkl_mel['bkl_misclassified_as_mel']} "
           f"({bkl_mel['bkl_misclassified_as_mel_pct']}% of bkl)")
     print(f"  {bkl_mel['note']}")
     print(classification_report(labels, preds, target_names=CLASS_NAMES, zero_division=0))
 
-    # ---- Plots ----
     plot_confusion_matrix(cm, args.strategy, args.results_dir)
     plot_per_class_f1(per_class_f1, args.strategy, args.results_dir)
 
-    # ---- Save JSON ----
     result = {
         "strategy":     args.strategy,
         "accuracy":     round(float(acc),        4),

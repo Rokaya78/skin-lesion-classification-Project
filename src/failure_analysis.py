@@ -1,12 +1,11 @@
 """
-Failure Mode Analysis — Week 4 / Report Section.
+Failure mode analysis for the Week 4 report section.
 
-Answers the questions:
+Questions I'm trying to answer:
   1. Which images does each strategy most consistently get wrong?
-  2. Are failures concentrated in specific classes (especially bkl ↔ mel)?
-  3. What visual properties (brightness, contrast, lesion size proxy) correlate
-     with prediction errors?
-  4. Which samples are "hard" (wrong across ALL strategies)?
+  2. Are the failures clustered in specific classes (especially bkl/mel)?
+  3. Do image brightness or contrast correlate with errors?
+  4. Which samples are wrong across ALL strategies (truly hard cases)?
 
 Usage:
     python src/failure_analysis.py \
@@ -34,10 +33,6 @@ from model import build_model
 from baseline_cnn import BaselineCNN
 
 
-# ---------------------------------------------------------------------------
-# Inference — returns per-image details
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def collect_predictions(model, dataset: HAM10000Dataset, device, batch_size=32):
     """Returns arrays: true_labels, pred_labels, confidences, image_paths."""
@@ -64,14 +59,10 @@ def collect_predictions(model, dataset: HAM10000Dataset, device, batch_size=32):
     )
 
 
-# ---------------------------------------------------------------------------
-# Visual feature extraction
-# ---------------------------------------------------------------------------
-
 def image_stats(path: str) -> dict:
-    """Return mean brightness, contrast (std), and aspect ratio."""
+    """Get mean brightness and contrast (std) from grayscale image."""
     try:
-        img  = Image.open(path).convert("L")   # grayscale
+        img  = Image.open(path).convert("L")
         stat = ImageStat.Stat(img)
         return {
             "brightness": round(stat.mean[0], 2),
@@ -80,10 +71,6 @@ def image_stats(path: str) -> dict:
     except Exception:
         return {"brightness": None, "contrast": None}
 
-
-# ---------------------------------------------------------------------------
-# Analysis helpers
-# ---------------------------------------------------------------------------
 
 def per_class_error_rate(true, pred) -> dict:
     rates = {}
@@ -97,9 +84,8 @@ def per_class_error_rate(true, pred) -> dict:
 
 
 def top_k_hardest(true, pred, paths, k=20) -> list[dict]:
-    """Return k samples that are wrong with highest-confidence wrong predictions."""
+    """Returns the first k wrong predictions (wrong index is a simple proxy for difficulty)."""
     wrong = np.where(true != pred)[0]
-    # Sort by index (proxy for confidence — caller can sort differently)
     return [
         {"idx": int(i), "true": CLASS_NAMES[true[i]],
          "pred": CLASS_NAMES[pred[i]], "path": paths[i]}
@@ -110,7 +96,7 @@ def top_k_hardest(true, pred, paths, k=20) -> list[dict]:
 def consensus_failures(per_strategy: dict[str, np.ndarray],
                        true: np.ndarray,
                        paths: list[str]) -> list[dict]:
-    """Images wrong across ALL evaluated strategies."""
+    """Finds images that are wrong in every evaluated strategy."""
     n          = len(true)
     wrong_sets = [set(np.where(true != pred)[0].tolist())
                   for pred in per_strategy.values()]
@@ -121,10 +107,6 @@ def consensus_failures(per_strategy: dict[str, np.ndarray],
         for i in sorted(common)
     ]
 
-
-# ---------------------------------------------------------------------------
-# Plots
-# ---------------------------------------------------------------------------
 
 def plot_error_rates(per_strategy_errors: dict[str, dict], out_dir: str):
     strategies = list(per_strategy_errors.keys())
@@ -144,6 +126,7 @@ def plot_error_rates(per_strategy_errors: dict[str, dict], out_dir: str):
     ax.set_ylabel("Error Rate (fraction wrong)")
     ax.set_title("Per-Class Error Rate by Strategy", fontsize=13)
     ax.legend(fontsize=9)
+    # shade the bkl and mel columns - those are the problematic ones
     ax.axvspan(CLASS_NAMES.index("bkl") - 0.4,
                CLASS_NAMES.index("bkl") + 0.9, alpha=0.07, color="red")
     ax.axvspan(CLASS_NAMES.index("mel") - 0.4,
@@ -186,7 +169,7 @@ def plot_failure_grid(failures: list[dict], title: str, out_path: str, n=12):
 
 
 def plot_brightness_vs_error(true, pred, paths, strategy: str, out_dir: str):
-    """Do darker / lower-contrast images fail more?"""
+    """Check whether darker or lower-contrast images fail more often."""
     correct_b, correct_c = [], []
     wrong_b,   wrong_c   = [], []
 
@@ -224,10 +207,6 @@ def plot_brightness_vs_error(true, pred, paths, strategy: str, out_dir: str):
     print(f"Saved: {path}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategies", nargs="+",
@@ -248,7 +227,7 @@ def main():
     os.makedirs(args.results_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Build val dataset (raw, no augment)
+    # build val set without augmentation
     _, val_loader, _ = get_dataloaders(
         args.csv, args.img_dirs,
         val_split=args.val_split,
@@ -256,7 +235,6 @@ def main():
         num_workers=0,
         use_sampler=False,
     )
-    # Access the underlying dataset
     val_ds = val_loader.dataset
 
     per_strategy_preds  = {}
@@ -286,7 +264,6 @@ def main():
         per_strategy_preds[strat]  = pred
         per_strategy_errors[strat] = per_class_error_rate(true, pred)
 
-        # Top-k hardest failures for this strategy
         hard = top_k_hardest(true, pred, paths, k=args.top_k)
         plot_failure_grid(
             hard, f"Top-{args.top_k} Failures — {strat}",
@@ -294,14 +271,13 @@ def main():
             n=min(12, args.top_k),
         )
 
-        # Brightness / contrast analysis
         plot_brightness_vs_error(true, pred, paths, strat, args.results_dir)
 
     if not per_strategy_preds:
         print("No checkpoints found. Train models first.")
         return
 
-    # Cross-strategy: consensus failures
+    # find images that are wrong in every strategy
     consensus = consensus_failures(per_strategy_preds, true_labels, image_paths)
     print(f"\nConsensus failures (wrong in ALL strategies): {len(consensus)}")
     if consensus:
@@ -312,11 +288,9 @@ def main():
             os.path.join(args.results_dir, "failure_consensus.png"),
         )
 
-    # Error rate bar chart
     if per_strategy_errors:
         plot_error_rates(per_strategy_errors, args.results_dir)
 
-    # Save JSON report
     report = {
         "per_class_error_rates": per_strategy_errors,
         "consensus_failure_count": len(consensus),

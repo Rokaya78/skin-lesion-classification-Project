@@ -1,15 +1,15 @@
 """
-Training script supporting all three strategies.
+Training script for all three MobileNetV2 strategies.
 
-Usage examples:
-  # Strategy 1 – feature extraction (frozen backbone)
+Usage:
+  # Strategy 1 - feature extraction (backbone frozen)
   python src/train.py --strategy feature_extraction --epochs 20
 
-  # Strategy 2 – progressive unfreezing
+  # Strategy 2 - progressive unfreezing
   python src/train.py --strategy progressive --epochs 30 \
       --unfreeze5_epoch 10 --unfreeze10_epoch 20
 
-  # Strategy 3 – full fine-tuning
+  # Strategy 3 - full fine-tuning
   python src/train.py --strategy full_finetune --epochs 30 --lr 1e-4
 """
 
@@ -28,10 +28,6 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from dataset import get_dataloaders, CLASS_NAMES, NUM_CLASSES
 from model import build_model, model_info
 
-
-# ---------------------------------------------------------------------------
-# One-epoch helpers
-# ---------------------------------------------------------------------------
 
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -72,10 +68,6 @@ def val_epoch(model, loader, criterion, device):
     return total_loss / total, acc, f1, pre, rec
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy",    required=True,
@@ -94,7 +86,7 @@ def main():
     parser.add_argument("--val_split",   type=float, default=0.2)
     parser.add_argument("--ckpt_dir",    default="checkpoints")
     parser.add_argument("--results_dir", default="results")
-    # Progressive unfreezing schedule
+    # progressive unfreezing schedule
     parser.add_argument("--unfreeze5_epoch",  type=int, default=10,
                         help="Epoch to unfreeze last 5 backbone blocks")
     parser.add_argument("--unfreeze10_epoch", type=int, default=20,
@@ -122,7 +114,7 @@ def main():
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
 
     def make_optimizer(model):
-        """Separate param groups: head gets args.lr, backbone gets args.lr_backbone."""
+        # separate param groups so the backbone can use a lower lr than the head
         head_params     = list(model.head.parameters()) + list(model.pool.parameters())
         backbone_params = [p for p in model.features.parameters() if p.requires_grad]
         groups = [{"params": head_params, "lr": args.lr}]
@@ -138,7 +130,7 @@ def main():
     ckpt_path = os.path.join(args.ckpt_dir, f"{args.strategy}_best.pth")
 
     for epoch in range(1, args.epochs + 1):
-        # Progressive unfreezing schedule
+        # progressive unfreezing: rebuild optimizer whenever we unlock more layers
         if args.strategy == "progressive":
             if epoch == args.unfreeze5_epoch:
                 print(f"  [Epoch {epoch}] Unfreezing last 5 backbone blocks")
@@ -184,7 +176,7 @@ def main():
                         "epoch":       epoch,
                         "val_f1":      va_f1}, ckpt_path)
 
-    # Final save
+    # save final weights too, not just the best
     torch.save({"model_state": model.state_dict(), "strategy": args.strategy},
                os.path.join(args.ckpt_dir, f"{args.strategy}_final.pth"))
 

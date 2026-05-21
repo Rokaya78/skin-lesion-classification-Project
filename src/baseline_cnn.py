@@ -1,19 +1,11 @@
 """
-Week 1 — Baseline CNN built entirely from scratch (no pretrained weights).
+Week 1 - baseline CNN trained from scratch (no pretrained weights).
+I built this to compare against MobileNetV2 transfer learning later.
 
-Architecture (inspired by VGG-style blocks but kept lightweight for CPU viability):
-
-  Input: (B, 3, 224, 224)
-
-  Block 1: Conv(3→32, 3×3) → BN → ReLU → Conv(32→32, 3×3) → BN → ReLU → MaxPool(2×2) → Drop(0.25)
-  Block 2: Conv(32→64, 3×3) → BN → ReLU → Conv(64→64, 3×3) → BN → ReLU → MaxPool(2×2) → Drop(0.25)
-  Block 3: Conv(64→128,3×3) → BN → ReLU → Conv(128→128,3×3) → BN → ReLU → MaxPool(2×2) → Drop(0.25)
-  Block 4: Conv(128→256,3×3)→ BN → ReLU → Conv(256→256,3×3)→ BN → ReLU → MaxPool(2×2) → Drop(0.25)
-
-  GlobalAvgPool → Flatten
-  FC: 256 → 256 → ReLU → Drop(0.5) → 7
-
-Total parameters: ~2.5M  (comparable to MobileNetV2's 2.2M for a fair baseline)
+The architecture is 4 conv blocks (double conv + BN + pool + dropout)
+followed by global average pooling and a small FC head.
+~2.5M parameters, which is roughly the same as MobileNetV2 for fair comparison.
+Input size: 224x224 (same as the transfer learning models).
 """
 
 from __future__ import annotations
@@ -42,20 +34,17 @@ def _vgg_block(in_ch: int, out_ch: int, dropout: float = 0.25) -> nn.Sequential:
 
 
 class BaselineCNN(nn.Module):
-    """
-    Scratch-trained CNN used as the Week-1 baseline.
-    Same input size (224×224) as MobileNetV2 for a fair comparison.
-    """
+    """Scratch-trained CNN, Week 1 baseline. Same 224x224 input as MobileNetV2."""
 
     def __init__(self, num_classes: int = NUM_CLASSES, dropout_fc: float = 0.5):
         super().__init__()
         self.features = nn.Sequential(
-            _vgg_block(3,    32),   # → (B,  32, 112, 112)
-            _vgg_block(32,   64),   # → (B,  64,  56,  56)
-            _vgg_block(64,  128),   # → (B, 128,  28,  28)
-            _vgg_block(128, 256),   # → (B, 256,  14,  14)
+            _vgg_block(3,    32),   # -> (B,  32, 112, 112)
+            _vgg_block(32,   64),   # -> (B,  64,  56,  56)
+            _vgg_block(64,  128),   # -> (B, 128,  28,  28)
+            _vgg_block(128, 256),   # -> (B, 256,  14,  14)
         )
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))   # → (B, 256, 1, 1)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256, 256),

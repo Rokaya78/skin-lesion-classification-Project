@@ -1,19 +1,19 @@
 """
-HAM10000 / ISIC dataset loader.
+Dataset loader for HAM10000 / ISIC skin lesion data.
 
-Expected layout after download:
+Expected folder layout:
     data/
       HAM10000_metadata.csv
       HAM10000_images_part1/   (*.jpg)
       HAM10000_images_part2/   (*.jpg)
 
-HAM10000 classes (7):
-    akiec - Actinic keratoses & intraepithelial carcinoma
+The 7 classes:
+    akiec - Actinic keratoses / intraepithelial carcinoma
     bcc   - Basal cell carcinoma
-    bkl   - Benign keratosis (easily confused with melanoma)
+    bkl   - Benign keratosis (often mixed up with melanoma)
     df    - Dermatofibroma
     mel   - Melanoma
-    nv    - Melanocytic nevi
+    nv    - Melanocytic nevi  (most samples, big imbalance issue)
     vasc  - Vascular lesions
 """
 
@@ -32,14 +32,10 @@ NUM_CLASSES = 7
 CLASS_NAMES = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASS_NAMES)}
 
-# ImageNet stats (MobileNetV2 was pretrained on ImageNet)
+# MobileNetV2 was pretrained on ImageNet, so we use ImageNet normalization stats
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
-
-# ---------------------------------------------------------------------------
-# Transforms
-# ---------------------------------------------------------------------------
 
 def get_train_transform() -> transforms.Compose:
     return transforms.Compose([
@@ -63,10 +59,6 @@ def get_val_transform() -> transforms.Compose:
     ])
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
 class HAM10000Dataset(Dataset):
     """
     Reads HAM10000_metadata.csv and loads images from one or more image dirs.
@@ -84,7 +76,7 @@ class HAM10000Dataset(Dataset):
         if ids is not None:
             meta = meta[meta["image_id"].isin(ids)].reset_index(drop=True)
 
-        # Build image_id → file path map
+        # build a lookup from image_id to file path
         path_map: dict[str, str] = {}
         for d in image_dirs:
             for fname in os.listdir(d):
@@ -92,7 +84,7 @@ class HAM10000Dataset(Dataset):
                     iid = os.path.splitext(fname)[0]
                     path_map[iid] = os.path.join(d, fname)
 
-        # Keep only rows where image file exists
+        # drop any rows where the image file is missing
         meta = meta[meta["image_id"].isin(path_map)].reset_index(drop=True)
 
         self.paths   = [path_map[iid] for iid in meta["image_id"]]
@@ -109,31 +101,23 @@ class HAM10000Dataset(Dataset):
         return img, self.labels[idx]
 
 
-# ---------------------------------------------------------------------------
-# Class-weight / sampler helpers
-# ---------------------------------------------------------------------------
-
 def compute_class_weights(labels: list[int], num_classes: int) -> torch.Tensor:
     """Inverse-frequency weights for nn.CrossEntropyLoss(weight=...)."""
     counts = np.bincount(labels, minlength=num_classes).astype(float)
     counts = np.where(counts == 0, 1, counts)
     weights = 1.0 / counts
-    weights = weights / weights.sum() * num_classes          # normalise
+    weights = weights / weights.sum() * num_classes   # normalize so they sum to num_classes
     return torch.tensor(weights, dtype=torch.float)
 
 
 def make_weighted_sampler(labels: list[int], num_classes: int) -> WeightedRandomSampler:
-    """Per-sample weights so each class is sampled equally."""
+    """Per-sample weights so each class gets sampled roughly equally."""
     counts = np.bincount(labels, minlength=num_classes).astype(float)
     counts = np.where(counts == 0, 1, counts)
     class_w = 1.0 / counts
     sample_w = torch.tensor([class_w[l] for l in labels], dtype=torch.float)
     return WeightedRandomSampler(sample_w, num_samples=len(sample_w), replacement=True)
 
-
-# ---------------------------------------------------------------------------
-# DataLoader factory
-# ---------------------------------------------------------------------------
 
 def get_dataloaders(
     csv_path: str,
@@ -150,7 +134,7 @@ def get_dataloaders(
     """
     meta = pd.read_csv(csv_path)
 
-    # Stratified split
+    # stratified split - sample from each class separately
     rng = np.random.default_rng(seed)
     val_ids: list[str] = []
     for cls in CLASS_NAMES:
@@ -186,9 +170,6 @@ def get_dataloaders(
     return train_loader, val_loader, class_weights
 
 
-# ---------------------------------------------------------------------------
-# Quick sanity check
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
     csv   = sys.argv[1] if len(sys.argv) > 1 else "data/HAM10000_metadata.csv"
